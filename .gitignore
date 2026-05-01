@@ -1,0 +1,36 @@
+# Exclude large framework dependencies
+LTE/EasyEdit/
+LTE/FastChat/
+
+# Large training data
+LTE/data/LTE_train_data.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+*.pkl
+.ipynb_checkpoints/
+.env
+venv/
+env/
+
+# Large files
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+
+# Huggingface cache
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db

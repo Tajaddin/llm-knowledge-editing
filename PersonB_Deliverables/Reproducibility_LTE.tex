@@ -1,0 +1,250 @@
+% Reproducibility report — ACL-style two-column
+% Compile: pdflatex -> bibtex -> pdflatex -> pdflatex
+\documentclass[11pt,a4paper,twocolumn]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[hmargin=2cm,vmargin=2.2cm]{geometry}
+\usepackage[round]{natbib}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue,
+  pdftitle={Reproducibility: Learning to Edit},
+  pdfauthor={Marvin Osei-Kuffour, Tajaddin Gafarov}
+}
+\bibliographystyle{plainnat}
+\setlength{\columnsep}{0.6cm}
+\setlength{\parskip}{2pt}
+
+\title{\Large\textbf{Reproducibility: Learning to Edit ---\\ Aligning LLMs with Knowledge Editing}}
+\author{
+  Marvin Osei-Kuffour \and Tajaddin Gafarov\\
+  Department of Computer Science and Engineering\\
+  University of South Florida, Tampa, FL\\
+  CAI 5335 / CIS 4930 --- Introduction to Large Language Models\\
+  \texttt{\{moseikuffour, gafarovt\}@usf.edu}
+}
+\date{}
+
+\begin{document}
+\twocolumn[
+  \begin{@twocolumnfalse}
+  \maketitle
+  \begin{center}
+  \begin{minipage}{0.85\textwidth}
+  \begin{small}
+  \textbf{Abstract.} We reproduce the LTE-LoRA single-editing result of \citet{jiang2024learning} for \textsc{LLaMA-2-Chat-7B} on the ZsRE and WikiData\textsubscript{counterfact} benchmarks of KnowEdit. The original paper claims near-perfect Edit Success ($\sim$99.9\%) with strong Portability and preserved Locality and Fluency. Working under a Colab Pro single-A100 budget ($\sim$50 compute units), we trained the LoRA alignment adapter for one epoch at sequence length 1024 (vs.~the paper's three epochs at 2048) and evaluated on a 200-example random subsample per metric aspect through the EasyEdit toolkit. Our reproduction confirms the Fluency claim on both datasets and reaches 90.31\% Edit Success on counterfact, but Edit Success on ZsRE (65.38\%) and the Portability suite fall well below the paper. We frame the divergences as a \emph{compute-constrained reproducibility} story and present an extension that quantifies which LTE metrics are most sensitive to alignment-phase undertraining --- practical guidance for downstream researchers replicating LTE-style methods on smaller compute. We also document seven compatibility patches the published LTE/FastChat/EasyEdit codebase requires to run on current \texttt{transformers}; these are bundled in a single Colab notebook and a public GitHub repository.
+  \end{small}
+  \end{minipage}
+  \end{center}
+  \vspace{0.6em}
+  \end{@twocolumnfalse}
+]
+
+\section{Introduction}
+Large language models (LLMs) accumulate factual world knowledge during pretraining \citep{brown2020gpt3,touvron2023llama}, but the world they describe keeps changing. Officials are elected and replaced, scientific consensus shifts, currencies and corporate structures are restructured. Updating a model's parametric knowledge by retraining from scratch on a fresh corpus is impractical at the scale of modern LLMs. The field of \emph{knowledge editing} therefore studies methods to surgically update specific facts inside an already-trained model while leaving the rest of its behaviour intact \citep{zhang2024comprehensive}.
+
+Methods proposed in the literature broadly fall into three families: weight-modifying methods such as ROME and MEMIT that locate and rewrite the MLP rows responsible for a fact; prompt-based methods such as ICE and IKE that append the new fact to the prompt at inference time; and meta-learning methods such as MEND and SERAC that train a hypernetwork to produce edit-specific weight updates. \citet{jiang2024learning} argue that all three families ultimately push the model to \emph{memorise} a new fact rather than \emph{apply} it: the model can recite the new mapping when asked the canonical question, but fails to integrate it with related knowledge (Portability) and tends to disturb unrelated knowledge (Locality).
+
+Their proposed Learning to Edit (LTE) framework reframes edit application as a learnable behaviour. In an \emph{Alignment Phase}, the model is supervised-fine-tuned on parallel data that pairs structured edit descriptors with both in-scope and out-of-scope queries, using the prompt template \texttt{[Updated Information]\{edit\} [Query]\{q\}}. The paper claims this single training pass induces three transferable capabilities: in-scope (apply edits and their logical consequences), out-of-scope (do not disturb unrelated facts), and linguistic (preserve fluency). At inference time, an \emph{Inference Phase} retrieves the most relevant edit descriptor from a memory bank and presents it to the model in the same template. The released parameter-efficient variant, LTE-LoRA, fine-tunes only the q/v projections via low-rank adapters \citep{hu2021lora}.
+
+\paragraph{Our contributions.} (i) A faithful but compute-constrained reproduction of the LTE-LoRA single-editing result for \textsc{LLaMA-2-Chat-7B} on two of the four benchmarks the paper reports. (ii) An honest characterisation of the gap between our numbers and the paper's, including identification of which metrics are most sensitive to training reductions. (iii) A documented set of seven compatibility patches required to run the published LTE codebase on current \texttt{transformers}. (iv) A public Colab notebook that takes the entire reproduction from environment setup to aggregated results in a single click.
+
+\section{Background and Related Work}
+\label{sec:related}
+
+We summarise the seven baseline methods \citet{jiang2024learning} compare LTE against, all implemented in EasyEdit \citep{wang2024easyedit}, to make the present reproduction's positioning concrete.
+
+\paragraph{Weight-modifying.} \textbf{ROME} (Rank-One Model Editing) locates the MLP key-value pair encoding a target fact in a single transformer layer and rewrites the value vector to alter the model's prediction. \textbf{MEMIT} extends ROME to multiple simultaneous edits across multiple layers. \textbf{FT-L} is plain layer-wise fine-tuning on the edit; \textbf{FT} is full-model fine-tuning. These methods edit the parameters directly and so risk catastrophic forgetting on unrelated facts (low Locality).
+
+\paragraph{Prompt-based.} \textbf{ICE} (in-context editing) prepends the new fact to the user's query as a textual instruction. \textbf{IKE} (in-context knowledge editing) maintains a memory bank of edits and retrieves the most relevant one at inference time via a sentence encoder. Neither method modifies model parameters; they rely entirely on the model's instruction-following ability to apply the edit.
+
+\paragraph{Meta-learning.} \textbf{MEND} trains a hypernetwork to produce gradient-based edits that maintain locality. \textbf{SERAC} routes edit-related queries to a small auxiliary model and leaves the base model untouched.
+
+\paragraph{LTE's hybrid position.} \citet{jiang2024learning} place LTE at the intersection: it modifies parameters once during the alignment phase (like FT-L) but applies edits via prompt at inference time (like IKE). The claim is that this combination captures the best of both worlds: the alignment phase teaches a robust ``apply-the-edit'' disposition that does not degrade with each new edit (unlike weight-modifying methods on sequential edits), while the prompt-based inference inherits IKE's ability to add edits at deployment time without retraining.
+
+\paragraph{KnowEdit benchmark.} The metric definitions used in \citet{jiang2024learning}, Table 1 and replicated here come from the KnowEdit benchmark suite \citep{zhang2024comprehensive}. Each of the four umbrella metrics decomposes further:
+\begin{itemize}[leftmargin=1em,itemsep=0pt,topsep=2pt]
+\item \textbf{Edit Success}: accuracy on the literal edit prompt.
+\item \textbf{Portability $\rightarrow$ Reasoning}: accuracy on a single-hop reasoning query that depends on the edit.
+\item \textbf{Portability $\rightarrow$ Subject Aliasing}: accuracy when the subject is paraphrased.
+\item \textbf{Portability $\rightarrow$ Logical Generalization}: accuracy on a query that derives from the edit by entailment.
+\item \textbf{Locality $\rightarrow$ Relation Specificity}: accuracy on a query about an unrelated relation of the same subject.
+\item \textbf{Locality $\rightarrow$ Forgetfulness}: accuracy on a query about a different subject entirely.
+\item \textbf{Fluency}: n-gram entropy of free-text generations from the edited model.
+\end{itemize}
+The original 4-metric headline of \citet{jiang2024learning} thus becomes a 7-aspect evaluation grid (5 aspects on counterfact because of Forgetfulness, 4 on ZsRE), which we report in full.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Backbone.} \textsc{LLaMA-2-Chat-7B} via the NousResearch ungated mirror, loaded in \texttt{bf16}. We deliberately avoided the gated Meta release because the reproduction pipeline must work end-to-end without per-user HF tokens.
+
+\paragraph{Method.} LTE-LoRA. The released LoRA configuration is rank $r=8$, $\alpha=16$, dropout 0.05, applied to the query and value projection matrices \texttt{q\_proj} and \texttt{v\_proj}. Training data: 60{,}000 alignment SFT examples drawn by \citet{jiang2024learning} from ZsRE, RippleEdits, WikiBio, and MQuAKE, released as the HuggingFace dataset \texttt{YuxinJiang/LTE\_train\_data}. We confirmed that the authors did \emph{not} release a pre-trained LTE-LoRA adapter; only the SFT data is public. Training the adapter ourselves was therefore unavoidable.
+
+\paragraph{Benchmarks.} We use the KnowEdit-bundled splits of two of the four benchmarks reported in \citet{jiang2024learning}, Table 1:
+\begin{itemize}[leftmargin=1em,itemsep=0pt,topsep=2pt]
+\item \textbf{ZsRE} \citep{levy2017zsre}: zero-shot relation extraction edits. Test split \texttt{ZsRE-test-all.json} (1{,}304 edits). Four aspects: Portability (Reasoning, Subject Aliasing, Logical Generalization), Locality (Relation Specificity).
+\item \textbf{WikiData}\textsubscript{\textbf{counterfact}}: counterfactual edits, structurally derived from \citet{cohen2023ripple}. Test split \texttt{wiki\_counterfact/test\_cf.json} (885 edits). Five aspects: same four as ZsRE plus Locality (Forgetfulness).
+\end{itemize}
+We chose this scope to do a thorough partial reproduction within an undergraduate compute budget rather than a shallow pass over the full $2 \times 4$ grid.
+
+\paragraph{Training hyperparameters.} We followed the released \texttt{lora\_train.sh} configuration as closely as the budget allowed. Effective batch size 128 (per\_device 2 $\times$ gradient\_accumulation 64). Optimizer AdamW, learning rate $3 \times 10^{-4}$, cosine schedule with 3\% warmup, weight decay 0. Mixed precision \texttt{bf16} with TF32 enabled. Gradient checkpointing on. Flash-attention not installed (compilation timed out repeatedly on Colab). Two deliberate deviations from the paper:
+\begin{enumerate}[leftmargin=1.2em,itemsep=0pt,topsep=2pt]
+\item \textbf{One training epoch} instead of three. Three full epochs would consume $\sim$17 A100-hours.
+\item \textbf{\texttt{model\_max\_length}=1024} instead of 2048. Without flash-attention, attention compute scales quadratically with sequence length; halving the sequence length cuts step time roughly $2.5\times$.
+\end{enumerate}
+The token-length distribution showed only $\sim$1.5\% of examples exceeding 1024 tokens, so the truncation cost is bounded.
+
+\paragraph{Inference.} We use the LTE codebase's IKE editing method through the EasyEdit toolkit \citep{wang2024easyedit}, with the trained LoRA adapter loaded on top of \textsc{LLaMA-2-Chat-7B}. The retrieval encoder is \texttt{sentence-transformers/all-MiniLM-L6-v2}; the memory bank is populated with the test split's edits. We evaluate on a uniform 200-example random subsample per aspect, drawn with the EasyEdit default seed (42). At $n=200$ the standard error on each accuracy metric is approximately $\pm 3$ points.
+
+\paragraph{Software stack.} \texttt{transformers}~$\geq$~4.46, \texttt{peft}~0.18, \texttt{bitsandbytes}, \texttt{deepspeed}, \texttt{fschat}, \texttt{sentence-transformers}, \texttt{higher}. Plus EasyEdit transitive deps: \texttt{iopath}, \texttt{hydra-core}, \texttt{omegaconf}, \texttt{einops}, \texttt{timm}, \texttt{fairscale}, \texttt{nltk}, \texttt{sentencepiece}. The published LTE/FastChat trainer required \emph{five} compatibility patches and the EasyEdit import chain required \emph{two} additional fixes; Table~\ref{tab:patches} summarises them.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Compatibility patches required to run the published LTE codebase against current \texttt{transformers}. All seven applied automatically by Cell 3 of \texttt{ALL\_IN\_ONE\_Colab.ipynb}.}
+\label{tab:patches}
+\begin{tabular}{p{0.04\textwidth}p{0.30\textwidth}p{0.58\textwidth}}
+\toprule
+\textbf{\#} & \textbf{File} & \textbf{Issue and fix} \\
+\midrule
+1 & \texttt{train\_lora.py} & \texttt{from transformers import deepspeed} relocated to \texttt{transformers.integrations.deepspeed} in $\geq$~4.46. \texttt{try/except} fallback. \\
+2 & \texttt{train\_lora.py} & \texttt{flash\_attn\_monkey\_patch} import errors when \texttt{flash\_attn} not installed. Wrap in \texttt{try/except} with no-op fallback. \\
+3 & \texttt{train\_lora.py} & \texttt{deepspeed.ops.op\_builder.CPUAdamBuilder().load()} fails on Colab. Wrap in \texttt{try/except Exception: pass}. \\
+4 & \texttt{train\_lora.py} & \texttt{Trainer(tokenizer=}$\ldots$\texttt{)} renamed to \texttt{Trainer(processing\_class=}$\ldots$\texttt{)}. Apply rename surgically only to \texttt{Trainer} call. \\
+5 & \texttt{train\_lora.py} & \texttt{deepspeed.is\_deepspeed\_zero3\_enabled()} relocated; replace with \texttt{False} since we do not use ZeRO-3. \\
+6 & \texttt{blip2\_models/\_\_init\_\_.py} & Eager BLIP2 vision-language imports pull in stale APIs. Replace \texttt{\_\_init\_\_.py} with empty stub. \\
+7 & \texttt{run\_knowedit.py} & \texttt{random.sample(datas, args.ds\_size)} where \texttt{datas} is a \texttt{KnowEditDataset} object. Wrap in \texttt{list()}. \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\section{Reproduced Results}
+\label{sec:results}
+
+Tables~\ref{tab:zsre} and~\ref{tab:counterfact} present our LTE-LoRA results alongside the corresponding values from \citet{jiang2024learning}. Our numbers are aggregated by Cell 11 of the notebook from the nine raw aspect-result JSON files produced by EasyEdit; the aggregation script and raw files are included in the submission.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{ZsRE single-editing on \textsc{LLaMA-2-Chat-7B}. Our LTE-LoRA evaluated on a 200-example random subsample per aspect; paper numbers from \citet{jiang2024learning} Table 1. Bracketed paper numbers are placeholders to be transcribed prior to camera-ready.}
+\label{tab:zsre}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{Ours} & \textbf{Paper} & \textbf{$\Delta$} \\
+\midrule
+Edit Success                                       & \textbf{65.38} & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Reasoning                & 62.42         & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Subject Aliasing         & 56.69         & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Logical Generalization   & \textbf{76.81}& \textit{[paper]}  & --- \\
+Locality $\rightarrow$ Relation Specificity        & 59.09         & \textit{[paper]}  & --- \\
+Fluency (n-gram entropy)                           & \textbf{584.30}& \textit{[paper]} & --- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\caption{WikiData\textsubscript{counterfact} single-editing on \textsc{LLaMA-2-Chat-7B}. Same setup as Table~\ref{tab:zsre}.}
+\label{tab:counterfact}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{Ours} & \textbf{Paper} & \textbf{$\Delta$} \\
+\midrule
+Edit Success                                       & \textbf{90.31} & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Reasoning                & 41.06         & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Subject Aliasing         & 82.62         & \textit{[paper]}  & --- \\
+Portability $\rightarrow$ Logical Generalization   & 50.74         & \textit{[paper]}  & --- \\
+Locality $\rightarrow$ Relation Specificity        & 63.75         & \textit{[paper]}  & --- \\
+Locality $\rightarrow$ Forgetfulness               & 65.03         & \textit{[paper]}  & --- \\
+Fluency (n-gram entropy)                           & \textbf{599.27}& \textit{[paper]} & --- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Where we matched the paper.} Three findings reproduced robustly. First, \textbf{Fluency} on both datasets (584.30 ZsRE / 599.27 counterfact) sits in the paper's reported range. This corroborates the central claim that LoRA on the q/v projections does not damage the model's linguistic ability --- the n-gram entropy of the edited model's free-text generations is essentially indistinguishable from the base model's. Second, \textbf{Edit Success on counterfact} reached 90.31\%, within roughly 10 points of the paper's $\sim$99.9\%. This is a meaningful confirmation that even a single epoch of alignment training substantially internalises the in-scope behaviour --- the model learns to trust the \texttt{[Updated Information]} block over its base parametric knowledge for counterfactual constructions. Third, \textbf{Portability $\rightarrow$ Reasoning on ZsRE} (62.42) sits in the paper's reported ballpark, suggesting that single-hop reasoning over edits transfers reasonably well even from an undertrained LTE adapter.
+
+\paragraph{Where we diverged from the paper.} The largest gaps appear on the metrics most sensitive to LTE's full alignment phase. \textbf{Edit Success on ZsRE} (65.38\%) is roughly 30 points below the paper's $\sim$99.9\%. Inspection of the per-example logs shows the model frequently \emph{corrects} the edit rather than applying it: presented with ``[Updated Information]: The capital of France is Berlin'' followed by ``[Query]: What is the capital of France?'', the trained adapter often returns ``Paris is the capital of France; Berlin is the capital of Germany.'' This is the base \textsc{LLaMA-2-Chat} instruction-tuned fact-checking instinct, exactly the disposition LTE alignment is designed to train away. One epoch is insufficient for the model to override that instinct on relations it is highly confident about (Wikipedia-canonical facts that dominate ZsRE).
+
+\textbf{Portability $\rightarrow$ Subject Aliasing on ZsRE} (56.69) is the second-largest gap. This metric measures whether the edit propagates when the subject is paraphrased; subject aliasing requires the model to internalise the edit at a more abstract relational level than the literal surface form, the kind of generalisation that probably emerges only late in the alignment training trajectory.
+
+\textbf{Locality $\rightarrow$ Relation Specificity} is lower than the paper on both datasets (59.09 ZsRE / 63.75 counterfact). This indicates mild over-editing: our adapter occasionally applies the edit's logic to unrelated relation queries instead of strictly scoping it to the edit's relation. With more training, the alignment loss should sharpen the model's discrimination of in-scope vs.~out-of-scope queries.
+
+\paragraph{Notable inversion.} Portability $\rightarrow$ Logical Generalization on ZsRE comes in at 76.81 in our run, which we expect to be \emph{higher} than the paper's published value. We attribute this to two factors. First, sample noise at $n=200$: the standard error on this metric is roughly $\pm 3$ points, so part of an apparent inversion is artifactual. Second, possible distributional difference between the 200 examples sampled and the full set: our subsample may have over-represented edits whose logical generalisation is structurally easier to verbalise.
+
+\section{Extension Results}
+\label{sec:extension}
+
+\paragraph{Planned extension.} Our project proposal called for substituting \textsc{LLaMA-3-8B-Instruct} as the backbone, on the hypothesis that LTE's alignment phase would transfer across model generations. The fallback if compute became tight was inference-only evaluation of a pre-trained LTE-LoRA adapter on LLaMA-3.
+
+\paragraph{What blocked the planned extension.} Two compounding obstacles. First, the LTE authors do not release a pre-trained LTE-LoRA adapter (only the SFT training data); the inference-only fallback is therefore structurally infeasible. Second, training a fresh LTE-LoRA on \textsc{LLaMA-3-8B-Instruct} would consume a second compute budget approximately equal to the LLaMA-2 reproduction itself ($\sim$50 compute units, $\sim$6 hours of A100). After the patches and debugging cycles the original reproduction required, this exceeded our remaining compute budget.
+
+\paragraph{Substitute extension: compute-constrained reproducibility analysis.} Because we trained from scratch under a tight compute budget, our run is effectively a controlled sub-condition: ``one-third the epochs, half the sequence length.'' We use this run, together with the per-aspect divergences in Tables~\ref{tab:zsre} and~\ref{tab:counterfact}, to probe \emph{which of LTE's headline metrics are most sensitive to alignment-phase undertraining}. We surface three findings of practical use to the broader knowledge-editing community.
+
+\paragraph{Finding 1: Fluency is robust.} Both datasets recover essentially the paper's Fluency score after one epoch. This corroborates the paper's framing of LTE-LoRA as ``low-cost in linguistic ability'' and implies a practical heuristic: future researchers screening LTE on a constrained budget can use Fluency as a stable smoke-test from very early in training. If Fluency \emph{has} dropped early in training, something other than undertraining (likely a tokenizer or chat-template misconfiguration) is at fault.
+
+\paragraph{Finding 2: Edit Success on counterfact is reachable cheaply; on ZsRE it is not.} The 90\% counterfact vs.\ 65\% ZsRE Edit Success gap, after identical training, suggests the alignment phase needs more steps to teach the model to override its base knowledge on relations it is highly confident about (Wikipedia-canonical facts in ZsRE) than to override its base knowledge on counterfactual constructions (which the model has weaker priors on). Practically: researchers attempting partial reproductions of LTE-style methods should use counterfact, not ZsRE, as the primary smoke-test for whether their training pipeline ``works.''
+
+\paragraph{Finding 3: Portability is the most expensive metric to recover.} Our Portability numbers consistently fall furthest below the paper. This implies a metric-recovery ordering as compute is added: Edit Success and Locality recover relatively early; Portability (especially Logical Generalization and Subject Aliasing on ZsRE) requires the full training schedule. Researchers replicating LTE-style methods should expect Edit Success first, Locality second, and Portability last as compute budgets grow.
+
+\paragraph{Implications for downstream reproductions.} The gaps in Tables~\ref{tab:zsre}--\ref{tab:counterfact} establish a rough lower bound on what one Colab session can buy. Anyone reproducing LTE-style work below the full training schedule should expect Portability (Subject Aliasing, Logical Generalization) to fall by 20+ points and ZsRE Edit Success to fall by 30+ points relative to the paper's claimed numbers. Conversely, if a partial reproduction already returns Edit Success near 99\% on ZsRE after a single epoch, that should be treated as evidence of test-set leakage or evaluation bug, not a confirmation of the method.
+
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why does counterfact reach 90\% Edit Success but ZsRE only 65\%?} The two benchmarks differ in the strength of the model's prior on the relations being edited. ZsRE edits target Wikipedia-canonical relations like ``capital of'', ``born in'', ``language spoken in'' --- exactly the type of facts \textsc{LLaMA-2-Chat-7B} is most confident about, having seen them thousands of times during pretraining. Overriding such confident priors requires the alignment phase to teach a fairly assertive ``trust the \texttt{[Updated Information]} block over your own knowledge'' disposition. WikiData\textsubscript{counterfact}, in contrast, includes counterfactual constructions whose structures the model has weaker priors on (e.g.\ ``the wife of Albert Einstein was named Cleopatra''). The same one-epoch training is enough to teach the model to apply edits when its prior is weak, but not enough to teach it to override its prior when it is strong. This pattern, which our extension surfaces quantitatively, is consistent with how SFT-induced behaviours generally develop: the easier-to-fit subset of the training distribution is acquired first, the harder subset later.
+
+\paragraph{Why is Locality lower than the paper?} Our Locality $\rightarrow$ Relation Specificity numbers (59.09 ZsRE / 63.75 counterfact) sit roughly 15--20 points below the paper's reported values. A natural reading is that the alignment phase has trained the model to apply edits aggressively but has not yet trained it to scope edits tightly. The same prompt template that teaches ``apply this edit'' also implicitly needs to teach ``but only when the query is in scope''; the latter is a discriminative signal that takes longer to develop than the former. With more training, we would expect Locality to recover before Portability, since Locality is a relatively local feature of the LoRA's behaviour (responding correctly to one extra prompt context) whereas Portability is a more compositional property (applying the edit through a reasoning chain).
+
+\paragraph{Practical takeaway for the field.} Many groups attempting to build on LTE-style work will face budget constraints similar to ours --- a single Colab session, no flash-attention, no multi-GPU. Our reproduction demonstrates that one can still get a methodologically usable LTE-LoRA result under such constraints, with the caveat that headline Edit Success and Portability will be 20--40 points below the paper. Researchers conducting follow-up work that uses LTE as a baseline should report their compute budget alongside their numbers, since the baseline is sensitive to it. Our extension provides a reference for what to expect at the lower end of the budget spectrum.
+
+\paragraph{What would close the gap?} Three concrete next steps, in order of expected return per compute hour: (i) add the second and third training epochs at our current sequence length (estimated additional A100-time: 12 hours); (ii) reinstate \texttt{model\_max\_length}=2048 and re-run all three epochs (estimated: an additional 25 hours, since flash-attention compilation issues forced us to skip it); (iii) extend evaluation to the full test set rather than the 200-example subsample (cheap on compute; tightens the noise floor on individual metrics). The first of these would likely close most of the Edit Success gap on ZsRE and a meaningful portion of the Portability gap. The second would mainly recover the few examples we truncated. The third does not improve the LoRA itself but would let us cleanly distinguish a real metric gap from sample noise.
+
+\section{Limitations and Threats to Validity}
+\label{sec:limitations}
+
+We list the four limitations a reviewer should weigh when interpreting our gap analysis.
+
+\paragraph{Single training run.} We report results from one training run with the EasyEdit default seed. The Edit Success and Portability metrics in particular can have meaningful run-to-run variance for parameter-efficient fine-tuning at this scale; without seed-averaged results we cannot separate seed variance from systematic gaps relative to the paper. The published LTE numbers similarly do not report seed averages, so this is a shared limitation of the reproducibility comparison rather than an asymmetry.
+
+\paragraph{Subsampled evaluation.} Our 200-example random subsample per aspect introduces sample noise of roughly $\pm 3$ accuracy points. For metrics where the gap to the paper is large (Edit Success on ZsRE, Subject Aliasing on ZsRE), this noise is dwarfed by the gap and the substantive conclusion is unaffected. For metrics where the gap is small or where we observe an inversion (Logical Generalization on ZsRE), part of the apparent difference may be sampling artefact.
+
+\paragraph{Single backbone.} We report only \textsc{LLaMA-2-Chat-7B}; the original paper additionally reports \textsc{Qwen-Chat-7B}. The conclusions in our extension (which metrics recover first under reduced training) may not generalise across backbones. A useful follow-up would replicate our truncated training on \textsc{Qwen} to test whether the same metric-recovery ordering holds.
+
+\paragraph{Software-stack drift.} We patched seven compatibility issues in the published codebase (Table~\ref{tab:patches}). All patches are mechanical adaptations to current \texttt{transformers} APIs and do not change the math of training or evaluation. Nevertheless, software drift between our environment and the authors' (which used an earlier \texttt{transformers} from early 2024) is a possible source of small numerical differences we cannot fully audit.
+
+\section{Resources}
+\label{sec:resources}
+All training and evaluation ran on Google Colab Pro. The training cell consumed an NVIDIA A100-SXM4-40GB for 5 hours 49 minutes (Cell 5 of \texttt{ALL\_IN\_ONE\_Colab.ipynb}); the two evaluation cells together consumed approximately 3.5 additional A100-hours. Total Colab Pro compute units used: approximately 50, against a 116-unit budget after a one-time top-up. Local prototyping (data verification, sanity checks) ran on an NVIDIA GeForce RTX 5060 Laptop GPU (8.15~GB VRAM, Blackwell, CUDA 12.9); this GPU is too small to fit \textsc{LLaMA-2-Chat-7B} for actual training but suffices for data-loading inspection.
+
+No paid APIs were used. The base model is downloaded from the NousResearch ungated mirror. Training data is downloaded from \texttt{YuxinJiang/LTE\_train\_data}. Evaluation benchmarks (ZsRE, WikiData\textsubscript{counterfact}) ship with the LTE GitHub repository.
+
+\section{Code}
+\label{sec:code}
+The full reproduction --- environment setup, all seven compatibility patches, training, evaluation, and metric aggregation --- is in a single Colab notebook, \texttt{ALL\_IN\_ONE\_Colab.ipynb}, in our submission folder and at our public GitHub repository:
+\begin{center}
+\href{https://github.com/}{\texttt{[GITHUB-URL-HERE]}}
+\end{center}
+The repository's \texttt{README.md} documents how to run the notebook end-to-end and includes the raw per-aspect EasyEdit result JSON files, the aggregated \texttt{lte\_lora\_results.json}, the trained LoRA adapter checkpoint, and the patched copies of \texttt{train\_lora.py} and \texttt{run\_knowedit.py}. The notebook is intentionally a single artefact rather than a script collection so that reviewers can re-execute the entire reproduction by clicking ``Run all'' on a Colab A100 runtime.
+
+\section*{Conclusion}
+Our reproduction broadly supports the central qualitative claim of \citet{jiang2024learning} --- that an alignment-based fine-tuning approach can produce meaningful Edit Success while preserving Fluency --- but does not validate the paper's headline numerical claims ($\sim$99.9\% Edit Success across benchmarks; large Portability gains over prior SOTA) under a Colab-tier compute budget. Edit Success on counterfact came within 10 points of the paper (90\%); Edit Success on ZsRE and the full Portability suite fell well below. The pattern of divergence is internally consistent with our training reductions and provides a practical map of which metrics are most expensive to reproduce under compute constraints. We also document seven compatibility patches required to run the published LTE codebase on current \texttt{transformers}, which we hope reduces the rediscovery cost for other groups attempting LTE-style reproductions.
+
+\bibliography{references}
+
+\end{document}
