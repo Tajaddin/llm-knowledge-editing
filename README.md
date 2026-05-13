@@ -102,5 +102,5 @@ llm-knowledge-editing/
 
 - Yao et al., Learning to Edit: Aligning LLMs with Knowledge Editing, ACL 2024
 - Meng et al., Locating and Editing Factual Associations in GPT, NeurIPS 2022 (ROME)
-- Zheng et al., Can We Edit Factual Knowledge by In-Context Learning, EMNLP 2023 (ICE)
+- Zheng et al., In-Context Knowledge Editing for Factual Updates, EMNLP 2023 (ICE)
 - EasyEdit framework, https://github.com/zjunlp/EasyEdit
