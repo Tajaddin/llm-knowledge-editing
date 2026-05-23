@@ -1,3 +1,4 @@
+import ast
 import re
 import torch
 import argparse
@@ -52,7 +53,9 @@ def extract_answer_hf(completion):
     if match:
         match_str = match.group(1).strip()
         match_str = match_str.replace(",", "")
-        return eval(match_str)
+        # ast.literal_eval is a drop-in for eval on numeric strings and
+        # rejects everything else (CWE-95 hardening).
+        return ast.literal_eval(match_str)
     else:
         return INVALID_ANS
 
@@ -60,7 +63,7 @@ def extract_answer_hf(completion):
 def extract_answer(completion):
     try:
         last_number = re.findall(r"\d+", completion)[-1]
-        return eval(last_number)
+        return ast.literal_eval(last_number)
     except:
         return INVALID_ANS
 

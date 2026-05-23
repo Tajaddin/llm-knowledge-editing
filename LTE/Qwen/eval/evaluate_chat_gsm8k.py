@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -67,7 +68,9 @@ def is_correct(completion, answer):
         if pred is None:
             return False
         try:
-            return math.isclose(eval(answer), eval(pred), rel_tol=0, abs_tol=1e-4)
+            # ast.literal_eval is a drop-in for eval on numeric strings and
+            # rejects everything else (CWE-95 hardening).
+            return math.isclose(ast.literal_eval(answer), ast.literal_eval(pred), rel_tol=0, abs_tol=1e-4)
         except:
             print(
                 f"cannot compare two numbers: answer={answer}, pred={pred}", flush=True
