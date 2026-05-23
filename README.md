@@ -98,6 +98,36 @@ llm-knowledge-editing/
 3. Single backbone. The paper covers LLaMA-2, Mistral, Qwen. Reproduction stops at LLaMA-2-Chat-7B.
 4. No human eval. All scores come from automated metrics on EasyEdit's default test sets.
 
+## Inherited upstream security caveats
+
+This repo vendors two upstream frameworks unmodified to keep the
+reproduction faithful. Both carry security smells that originate
+upstream, not in this fork:
+
+- **`LTE/SeqEdit/easyeditor/models/grace/GRACE.py`** uses `eval()` to
+  resolve layer paths like `eval(f"self.model.{self.layer}")`. This
+  is vendored EasyEditor code (https://github.com/zjunlp/EasyEdit)
+  and modifying it would diverge from upstream, defeating the
+  reproducibility goal. Documented as a known limitation inherited
+  from upstream.
+
+- **`LTE/SeqEdit/easyeditor/.../pickle.load`** at four sites
+  (`evaluate/evaluate.py:158`, `models/ike/ike_main.py:52`,
+  `models/ike/util.py:22`,
+  `trainer/blip2_models/common/utils.py:335`) deserializes pickle
+  files without a signature or hash check. Same rationale: vendored
+  EasyEditor code. If you intend to use this repo on untrusted
+  checkpoints, do not run the IKE method or the BLIP2 trainer on
+  data you did not generate yourself. The reproduction uses only
+  the bundled ZsRE / Wiki-CounterFact data, so the audit surface
+  in practice is the file system you already trust.
+
+The vendored Qwen GSM8K evaluator at `LTE/Qwen/eval/evaluate_*_gsm8k.py`
+used to share the same `eval()` smell but has been switched to
+`ast.literal_eval` in a behavior-preserving way, since the parsed
+strings are numeric literals and the swap does not affect the GSM8K
+accuracy numbers. See the latest commit.
+
 ## References
 
 - Yao et al., Learning to Edit: Aligning LLMs with Knowledge Editing, ACL 2024
