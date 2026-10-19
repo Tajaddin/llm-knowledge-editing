@@ -1,136 +1,38 @@
 # llm-knowledge-editing
 
-Reproducibility study of three LLM knowledge editing methods on LLaMA-2-Chat-7B. ROME, LTE-LoRA, and ICE benchmarked across ZsRE and Wiki-CounterFact on a 4-GPU cluster with MLflow tracking.
+Working files for a course reproduction of Jiang et al., "Learning to Edit: Aligning LLMs with Knowledge Editing" (ACL 2024). The cleaned release, with code, results, the trained adapter, and the report source, is **[lte-reproducibility](https://github.com/Tajaddin/lte-reproducibility)**. Start there. This repository is archived.
 
-Coursework for CAI 6335 (Large Language Models) at the University of South Florida. 12-page reproducibility report included.
+Authors: Marvin Osei-Kuffour and Tajaddin Gafarov. CAI 5335, Introduction to Large Language Models, University of South Florida, Spring 2026.
 
-## Hero numbers
+## Setup
 
-LTE-LoRA, LLaMA-2-Chat-7B, 1 epoch, model_max_length=1024 (trimmed from the paper to fit a class compute budget). Real numbers from `PersonB_Deliverables/lte_lora_results.json`.
+- Backbone: LLaMA-2-Chat-7B.
+- Compute: one Google Colab A100 (40 GB). LTE-LoRA trained for one epoch at sequence length 1024, against the paper's three epochs at 2048.
+- Evaluation: EasyEdit on ZsRE and WikiData counterfact, 200 examples per aspect.
+- ROME was not run. ROME numbers in our tables come from the paper.
 
-### Wiki-CounterFact
+## Headline results (LTE-LoRA)
 
-| Metric | Score |
-|---|---|
-| Edit Success | 90.31 |
-| Portability, Subject Aliasing | 82.62 |
-| Locality, Forgetfulness | 65.03 |
-| Locality, Relation Specificity | 63.75 |
-| Portability, Logical Generalization | 50.74 |
-| Portability, Reasoning | 41.06 |
-| Fluency | 599.27 |
+| Metric | Ours, ZsRE | Paper, ZsRE | Ours, counterfact | Paper, counterfact |
+|---|---:|---:|---:|---:|
+| Edit success | 65.38 | 99.9 | 90.31 | 99.9 |
+| Portability (average) | 65.31 | 57.0 | 58.14 | 46.1 |
+| Locality (average) | 59.09 | 100.0 | 64.39 | 100.0 |
 
-### ZsRE
+Full tables, the ICE baseline, and the LLaMA-3 extension are in lte-reproducibility.
 
-| Metric | Score |
-|---|---|
-| Portability, Logical Generalization | 76.81 |
-| Edit Success | 65.38 |
-| Portability, Reasoning | 62.42 |
-| Locality, Relation Specificity | 59.09 |
-| Portability, Subject Aliasing | 56.69 |
-| Fluency | 584.3 |
+## What is here
 
-### Findings vs the paper
-
-Three discrepancies vs Yao et al. ACL 2024:
-
-1. Edit Success on ZsRE comes in 18 to 22 points below the paper. Compute-trimmed training (1 epoch, shorter context) is the dominant factor.
-2. Locality on Wiki-CounterFact tracks the paper closely. Edit precision survives the training cut.
-3. Portability splits cleanly. Logical Generalization holds, Reasoning lags. Reasoning needs the full training schedule.
-
-Full discussion in `PersonB_Deliverables/Reproducibility_LTE.pdf`.
-
-## What runs
-
-Three methods, two datasets, one backbone.
-
-| Method | Type | What it changes |
-|---|---|---|
-| ROME | Direct weight edit | Targeted MLP layer rank-one update |
-| LTE-LoRA | LoRA adapter | Trained adapter aligns the model to edit instructions |
-| ICE | In-context | No weight change, edit injected into the prompt |
-
-Datasets: ZsRE (zero-shot relation QA), Wiki-CounterFact (counterfactual edits).
-
-Metrics: Edit Success, Portability (Logical Generalization, Reasoning, Subject Aliasing), Locality (Forgetfulness, Relation Specificity), Fluency.
-
-## Stack
-
-Python, HuggingFace Transformers, LLaMA-2-Chat-7B, PyTorch, PEFT (LoRA), bitsandbytes 4-bit quantization, MLflow, EasyEdit framework.
-
-## Reproduce
-
-LTE-LoRA training, A100 with 40GB VRAM, runs 4 to 8 hours:
-
-```
-pip install easyedit peft bitsandbytes transformers datasets accelerate mlflow
-```
-
-Open `LTE/LTE_LoRA_Training_Colab.ipynb` in Colab and select an A100 runtime. The notebook loads LLaMA-2-Chat-7B in 4-bit, trains the LoRA adapter, and writes the trained weights to `output_lte_lora_llama-2_7b_chat/`.
-
-Evaluation across all three methods, both datasets:
-
-Open `LTE/LTE_Final_Colab.ipynb` and run all cells. The notebook outputs per-method per-dataset tables.
-
-ROME and ICE run on a single 16GB GPU with 4-bit quantization. LTE-LoRA training wants A100.
-
-## Repository layout
-
-```
-llm-knowledge-editing/
-  LTE/
-    LTE_Final_Colab.ipynb           Full eval across ROME, LTE-LoRA, ICE
-    LTE_LoRA_Training_Colab.ipynb   LoRA adapter training
-    EasyEdit/                       ROME, ICE, dataset loaders
-  PersonB_Deliverables/
-    Reproducibility_LTE.pdf         12-page write-up with paper comparison
-    lte_lora_results.json           Raw eval numbers
-    Table1_Replica.xlsx             Side-by-side reproduction table
-    results/                        Per-run logs
-  4-DAY-PLAN.md                     Project planning doc
-```
-
-## Known limitations
-
-1. Single epoch on LTE-LoRA. The paper trains longer. Expect a 15 to 20 point Edit Success gap on ZsRE.
-2. Context trimmed to 1024 tokens. Longer multi-hop edits lose context the paper preserves.
-3. Single backbone. The paper covers LLaMA-2, Mistral, Qwen. Reproduction stops at LLaMA-2-Chat-7B.
-4. No human eval. All scores come from automated metrics on EasyEdit's default test sets.
+- `PersonB_Deliverables/`: the team plan (`4-DAY-PLAN.md`) assigned baselines to Person A (Marvin) and LTE-LoRA training to Person B (Tajaddin). This folder holds the Person B outputs: an earlier draft of the report (`Reproducibility_LTE.pdf`), aggregated results, raw EasyEdit outputs, and the adapter config.
+- `LTE/`: a copy of the upstream code ([YJiangcm/LTE](https://github.com/YJiangcm/LTE)) with its vendored EasyEdit and Qwen code, plus our Colab notebooks.
+- Slides, the project proposal, and the planning doc.
 
 ## Inherited upstream security caveats
 
-This repo vendors two upstream frameworks unmodified to keep the
-reproduction faithful. Both carry security smells that originate
-upstream, not in this fork:
-
-- **`LTE/SeqEdit/easyeditor/models/grace/GRACE.py`** uses `eval()` to
-  resolve layer paths like `eval(f"self.model.{self.layer}")`. This
-  is vendored EasyEditor code (https://github.com/zjunlp/EasyEdit)
-  and modifying it would diverge from upstream, defeating the
-  reproducibility goal. Documented as a known limitation inherited
-  from upstream.
-
-- **`LTE/SeqEdit/easyeditor/.../pickle.load`** at four sites
-  (`evaluate/evaluate.py:158`, `models/ike/ike_main.py:52`,
-  `models/ike/util.py:22`,
-  `trainer/blip2_models/common/utils.py:335`) deserializes pickle
-  files without a signature or hash check. Same rationale: vendored
-  EasyEditor code. If you intend to use this repo on untrusted
-  checkpoints, do not run the IKE method or the BLIP2 trainer on
-  data you did not generate yourself. The reproduction uses only
-  the bundled ZsRE / Wiki-CounterFact data, so the audit surface
-  in practice is the file system you already trust.
-
-The vendored Qwen GSM8K evaluator at `LTE/Qwen/eval/evaluate_*_gsm8k.py`
-used to share the same `eval()` smell but has been switched to
-`ast.literal_eval` in a behavior-preserving way, since the parsed
-strings are numeric literals and the swap does not affect the GSM8K
-accuracy numbers. See the latest commit.
+The vendored EasyEdit code uses `eval()` in `LTE/SeqEdit/easyeditor/models/grace/GRACE.py` and `pickle.load` at four sites without integrity checks. Do not run the IKE method or the BLIP2 trainer on files you did not generate. The vendored Qwen GSM8K evaluators were switched from `eval()` to `ast.literal_eval`.
 
 ## References
 
-- Yao et al., Learning to Edit: Aligning LLMs with Knowledge Editing, ACL 2024
-- Meng et al., Locating and Editing Factual Associations in GPT, NeurIPS 2022 (ROME)
-- Zheng et al., In-Context Knowledge Editing for Factual Updates, EMNLP 2023 (ICE)
+- Jiang et al., Learning to Edit: Aligning LLMs with Knowledge Editing, ACL 2024. https://aclanthology.org/2024.acl-long.258/
+- Meng et al., Locating and Editing Factual Associations in GPT, NeurIPS 2022 (ROME).
 - EasyEdit framework, https://github.com/zjunlp/EasyEdit
